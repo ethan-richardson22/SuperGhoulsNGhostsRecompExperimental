@@ -1,0 +1,35 @@
+format_version = 1
+id = "sgng.enhancements"
+version = "1.0.0"
+name = "Super Ghouls 'n Ghosts Enhancements"
+author = "SuperGhoulsNGhostsSNESRecomp"
+description = "Built-in enhancements for this recompilation. Both are off by default."
+license = "MIT"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "superghoulsnghosts-usa"
+rom_sha256 = "7468c271d7240cf4e0d08c16e9969a1b1b1caf5adc0e5adc568d93c92651a057"
+
+[[feature]]
+id = "widescreen"
+name = "Widescreen (16:9)"
+description = "Shows more of each level at the sides during gameplay, with the status bar spread to the screen edges. Title, map and loading screens stay 4:3. Enemies still appear at the original 4:3 edges."
+group = "Display"
+default_enabled = false
+
+[[plugin]]
+feature = "widescreen"
+id = "sgng.widescreen"
+
+[[feature]]
+id = "lag_reduction"
+name = "Lag reduction"
+description = "Removes the game's slowdown in busy gameplay scenes by letting a late frame finish before the next one is shown. Title, intro and loading screens are unchanged."
+group = "Gameplay"
+default_enabled = false
+
+[[plugin]]
+feature = "lag_reduction"
+id = "sgng.lag_reduction"

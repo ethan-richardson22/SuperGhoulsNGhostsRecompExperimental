@@ -34,6 +34,14 @@ endif()
 # Must precede the include: runner.cmake reads it to add the loader sources.
 set(SNESRECOMP_ENABLE_MODS ON CACHE BOOL
     "Mod package loader + trusted plugins (required for every title)" FORCE)
+# Compose each frame in cached memory (HLE), not straight into the GPU
+# texture's write-combined mapping (LLE, the framework's non-Windows default).
+# LLE reads that mapping back every frame (the overlay snapshot and the FPS
+# readout blend), which on Linux/Vulkan cost 10-19 ms a frame and made the
+# game cycle between 60 and ~44 fps; HLE measured 0.13 ms and a steady 60.
+# Presentation only. Not FORCE: -DSNESRECOMP_FRAME_IMPL=LLE still selects it.
+set(SNESRECOMP_FRAME_IMPL HLE CACHE STRING
+    "Desktop frame composition (LLE or HLE)")
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 
 add_executable(SuperGhoulsNGhostsSNESRecomp
@@ -41,6 +49,7 @@ add_executable(SuperGhoulsNGhostsSNESRecomp
     src/main.c
     src/host_contract.c
     src/game_rtl.c
+    src/game_ws.c
     src/gen_stubs.c
 )
 

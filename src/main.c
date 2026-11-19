@@ -27,6 +27,7 @@
 
 #include "host_main.h"
 #include "game_rtl.h"
+#include "game_ws.h"
 #include "snesrecomp_rom_identity.h"  /* generated from rom_identity.txt */
 
 #ifndef __ANDROID__
@@ -56,6 +57,10 @@ static const SnesDesktopHostGame kGameHost = {
     /* Battery-backed SRAM shows the launcher's SAVES panel. Leave NULL for a
      * title without one. The path is exe-relative. */
     .sram_path           = "saves/save.srm",
+    /* Widescreen is the "Widescreen (16:9)" mod (src/game_ws.c), so there is
+     * no Settings row for it (widescreen_supported stays 0). */
+    .native_widescreen   = 1,
+    .prepare_frame       = &SgngWsPrepareFrame,
 };
 
 #ifndef __ANDROID__
