@@ -188,6 +188,14 @@ static void ObserveLine(const Ppu *ppu, unsigned line, void *context)
     (void)context;
     if ((ppu->bgmode & 7) != 1)
         s_unsupported_mode = true;
+    if (getenv("SGNG_LINELOG")) {
+        static int ph[4], pv[4], pm;
+        if (line <= 1 || ph[0] != ppu->hScroll[0] || pv[0] != ppu->vScroll[0] || ph[1] != ppu->hScroll[1] || pv[1] != ppu->vScroll[1] || ph[2] != ppu->hScroll[2] || pv[2] != ppu->vScroll[2] || pm != ppu->screenEnabled[0])
+            fprintf(stderr, "LN f=%u y=%u bg1=%d,%d bg2=%d,%d bg3=%d,%d tm=%02X mode=%02X\n", (unsigned)snes_frame_counter, line,
+                ppu->hScroll[0], ppu->vScroll[0], ppu->hScroll[1], ppu->vScroll[1], ppu->hScroll[2], ppu->vScroll[2], ppu->screenEnabled[0], ppu->bgmode);
+        for (int i = 0; i < 3; i++) { ph[i] = ppu->hScroll[i]; pv[i] = ppu->vScroll[i]; }
+        pm = ppu->screenEnabled[0];
+    }
     /* BG3 is the HUD map until the H-blank split, so the registers before
      * the field show that; the playfield's are taken here, below it. The
      * split clears BGMODE's BG3-priority bit ($09 -> $01). It lands late on
@@ -292,12 +300,24 @@ static int32_t WindowRow(const LayerTags *t, int row, int32_t cy)
     return t->row_set[row] ? t->row_world[row] : Nearest(row, t->rows, cy);
 }
 
+#include "snes/dma.h"
+#include <stdio.h>
+#include <stdlib.h>
+static void DbgDma(uint8_t b, uint16_t a, uint16_t vm, uint16_t n)
+{
+    if (getenv("SGNG_DMALOG"))
+        fprintf(stderr, "DMA f=%u src=%02X:%04X vm=%04X n=%u inc=%d\n",
+                (unsigned)snes_frame_counter, b, a, vm, n, g_ppu->vramIncrement);
+}
 static void OnVramWrite(uint32_t byte_addr, uint8_t value)
 {
     (void)value;
     /* Both halves of a word: the hook runs after each byte lands, so the
      * tag's entry is always the word VRAM now holds. */
     const uint16_t word = (uint16_t)(byte_addr >> 1);
+    if (getenv("SGNG_DMALOG") && (byte_addr & 1))
+        fprintf(stderr, "VW f=%u w=%04X v=%04X inc=%d\n", (unsigned)snes_frame_counter,
+                word, g_ppu->vram[word], g_ppu->vramIncrement);
     const bool column_upload = g_ppu->vramIncrement == 32;
     for (int i = 0; i < kLayers; i++) {
         LayerTags *t = &s_layers[i];
@@ -603,74 +623,11 @@ static bool WindowHides(const Ppu *ppu, unsigned layer, bool sub, int x)
     }
 }
 
-/* ── BG1's WRAM mirror ─────────────────────────────────────────────────
- *
- * The column builder ($01:C45A) also writes every BG1 column it builds to
- * a WRAM ring at $7E:B000: four blocks of 32 world columns ($800 bytes
- * each, block = world column / 32 mod 4), 32 rows of $40 bytes. It builds
- * about 80 columns ahead of the camera, so the ring holds world columns
- * from about 47 behind the camera to 80 ahead of it. That covers both margins.
- *
- * Stage 1's heaving ground is drawn into this ring, ahead of the view as
- * well as in it, and the whole top half of the map is copied from it to
- * VRAM every few frames as one row upload. Those rows reach map columns
- * the stream has not moved to yet, so VRAM there holds terrain for world
- * columns the tags cannot place, and the stage's map has the flat ground.
- * The ring has the right tiles.
- *
- * A taller stage uses another layout (the builder's $D000 path). So the
- * ring is used only on a stage one screen high, and only while it agrees
- * with what the native view shows. */
-#define SGNG_BG1_MIRROR      0xB000u
-#define SGNG_MIRROR_BEHIND   40   /* columns behind the view's left edge */
-#define SGNG_MIRROR_AHEAD    72   /* columns past it */
-static bool s_mirror_ok;
-
-static bool MirrorTile(int32_t wx, int32_t wy, uint16_t *entry)
-{
-    const int32_t c0 = s_layers[0].world_x >> 3;
-    if (!s_mirror_ok || wx < 0 || wy < 0 || wy >= 32 ||
-        wx < c0 - SGNG_MIRROR_BEHIND || wx > c0 + SGNG_MIRROR_AHEAD)
-        return false;
-    const uint32_t off = SGNG_BG1_MIRROR + (uint32_t)((wx >> 5) & 3) * 0x800u +
-                         (uint32_t)wy * 0x40u + (uint32_t)(wx & 31) * 2u;
-    *entry = (uint16_t)(g_ram[off] | g_ram[off + 1] << 8);
-    return true;
-}
-
-/* The ring is trusted while nearly every BG1 cell the native view shows
- * matches it. VRAM can trail the ring by a few frames while the ground
- * heaves, so the match need not be exact. */
-static void CheckMirror(void)
-{
-    const LayerTags *t = &s_layers[0];
-    s_mirror_ok = false;
-    if (!t->have_last || t->shift != 3 || t->cols != 64 || s_maps[0].height_px > 256)
-        return;
-    const int32_t x0 = t->world_x >> 3, y0 = (t->world_y + 1) >> 3;
-    const int32_t y1 = (t->world_y + 224) >> 3;
-    if (x0 < 0 || y0 < 0 || y1 >= 32)
-        return;
-    s_mirror_ok = true;  /* so MirrorTile reads while measuring */
-    int cells = 0, same = 0;
-    for (int32_t wy = y0; wy <= y1; wy++)
-        for (int32_t wx = x0; wx <= x0 + 32; wx++) {
-            uint16_t m;
-            MirrorTile(wx, wy, &m);
-            cells++;
-            same += m == CellEntry(t, CellFor(t, wx, wy));
-        }
-    s_mirror_ok = same * 16 >= cells * 15;
-}
-
-/* Margin tile source: BG1's mirror where it holds the tile, else verified
- * VRAM, else the stage's map. */
+/* Margin tile source: verified VRAM, else the stage's map. */
 static bool MarginTile(int i, int32_t px, int32_t py, uint16_t *entry)
 {
     const LayerTags *t = &s_layers[i];
     const int32_t wx = px >> 3, wy = py >> 3;
-    if (i == 0 && MirrorTile(wx, wy, entry))
-        return true;
     uint16_t level;
     const bool have_level = LevelTile(i, px, py, &level);
     if (px >= 0 && py >= 0 && CellHolds(t, wx, wy)) {
@@ -821,8 +778,53 @@ void SgngWsDrawPpuFrame(void)
         snes_beam_frame_driver_draw_ppu_frame();
         return;
     }
+    if (getenv("SGNG_DMALOG")) {
+        static uint16_t prev[0x8000]; static int have;
+        if (have) {
+            int runs = 0; int start = -1;
+            for (int w = 0; w <= 0x8000; w++) {
+                bool d = w < 0x8000 && prev[w] != g_ppu->vram[w];
+                if (d && start < 0) start = w;
+                if (!d && start >= 0) { if (runs++ < 40) fprintf(stderr, "VD f=%u %04X-%04X\n", (unsigned)snes_frame_counter, start, w - 1); start = -1; }
+            }
+            fprintf(stderr, "VD f=%u runs=%d\n", (unsigned)snes_frame_counter, runs);
+        }
+        memcpy(prev, g_ppu->vram, sizeof prev); have = 1;
+    }
+    if (getenv("SGNG_RAMDUMP") && snes_frame_counter == (unsigned)atoi(getenv("SGNG_RAMDUMP"))) {
+        FILE *f = fopen("ram.bin", "wb"); fwrite(g_ram, 1, 0x20000, f); fclose(f);
+        f = fopen("vram.bin", "wb"); fwrite(g_ppu->vram, 2, 0x8000, f); fclose(f);
+    }
+    if (getenv("SGNG_RAMDIFF")) {
+        static uint8_t prevr[0x20000]; static int haver;
+        unsigned a = (unsigned)atoi(getenv("SGNG_RAMDIFF"));
+        if (haver && snes_frame_counter >= a && snes_frame_counter < a + 1200) {
+            int start = -1;
+            for (int w = 0; w <= 0x20000; w++) {
+                bool d = w < 0x20000 && prevr[w] != g_ram[w];
+                if (d && start < 0) start = w;
+                if (!d && start >= 0 && (w >= 0x20000 || prevr[w+1] == g_ram[w+1]) ) {
+                    if (start >= 0x2000) fprintf(stderr, "RD f=%u %05X-%05X\n", (unsigned)snes_frame_counter, start, w - 1);
+                    start = -1;
+                }
+            }
+        }
+        memcpy(prevr, g_ram, sizeof prevr); haver = 1;
+    }
+    if (getenv("SGNG_OAMLOG") && snes_frame_counter == (unsigned)atoi(getenv("SGNG_OAMLOG"))) {
+        fprintf(stderr, "OBSEL=%02X\n", g_ppu->obsel);
+        for (int n = 0; n < 128; n++) {
+            int x = g_ppu->oam[n * 2] & 0xff, y = g_ppu->oam[n * 2] >> 8;
+            int attr = g_ppu->oam[n * 2 + 1];
+            int hi = (g_ppu->highOam[n >> 2] >> ((n & 3) * 2)) & 3;
+            if (hi & 1) x -= 256;
+            if (y < 224 && y > 0)
+                fprintf(stderr, "OAM %3d x=%4d y=%3d tile=%03X pal=%d pri=%d big=%d\n", n, x, y, attr & 0x1ff, (attr >> 9) & 7, (attr >> 12) & 3, hi >> 1);
+        }
+    }
     if (!s_hook_installed) {
         ppu_set_vram_write_log_hook(OnVramWrite);
+        dma_set_vram_notify_hook(DbgDma);
         s_hook_installed = true;
     }
 
@@ -840,8 +842,36 @@ void SgngWsDrawPpuFrame(void)
         for (int i = 0; i < kLayers; i++)
             if (regs[i].valid)
                 UpdateView(i, &regs[i]);
-        CheckMirror();
         ApplyViewBounds();
+        if (getenv("SGNG_MAPCMP") && snes_frame_counter == (unsigned)atoi(getenv("SGNG_MAPCMP"))) {
+            LayerTags *t = &s_layers[0];
+            int32_t c0 = t->world_x >> 3;
+            fprintf(stderr, "MAPCMP cam col %d, cols %d..%d (| = native edge)\n", c0, c0 - 32, c0 + 63);
+            for (int wy = 0; wy < 32; wy++) {
+                char line[200]; int n = 0;
+                for (int wx = c0 - 40; wx < c0 + 100; wx++) {
+                    if (wx == c0 || wx == c0 + 32) line[n++] = '|';
+                    uint16_t lv; bool hl = LevelTile(0, wx << 3, wy << 3, &lv);
+                    uint16_t ve = CellEntry(t, CellFor(t, wx, wy));
+                    bool held = CellHolds(t, wx, wy);
+                    uint16_t bf = 0; bool hb = wx >= 0;
+                    if (hb) { uint32_t o = 0xB000u + (uint32_t)(wx >> 5) * 0x800u + (uint32_t)(wy & 31) * 0x40u + (uint32_t)(wx & 31) * 2u; bf = (uint16_t)(g_ram[o] | g_ram[o + 1] << 8); }
+                    bool native = wx >= c0 && wx < c0 + 33;
+                    if (getenv("SGNG_BUF"))
+                        line[n++] = !hb ? ' ' : native ? (bf == ve ? '=' : '!') : bf == lv ? '.' : 'X';
+                    else
+                    line[n++] = !hl ? ' ' : ve == lv ? (held ? '.' : ',') : (held ? 'X' : 'x');
+                }
+                line[n] = 0;
+                fprintf(stderr, "MAPCMP %2d %s\n", wy, line);
+            }
+        }
+        if (getenv("SGNG_DMALOG"))
+            for (int i = 0; i < kLayers; i++)
+                fprintf(stderr, "L ax=%d in=%04X f=%u bg%d h=%d v=%d cam=%d,%d world=%d,%d map=%04X %dx%d sh=%d mapw=%d tab=%04X\n",
+                        Ram16(0x045B), Ram16(0x0020), (unsigned)snes_frame_counter, i + 1, regs[i].h, regs[i].v, LayerCamX(i), LayerCamY(i),
+                        s_layers[i].world_x, s_layers[i].world_y, s_layers[i].map_base, s_layers[i].cols,
+                        s_layers[i].rows, s_layers[i].shift, s_maps[i].width_px, s_maps[i].table);
         PpuSetWidescreenHudSplit(g_ppu, SGNG_HUD_LINES, SGNG_HUD_LEFT_END,
                                  SGNG_HUD_RIGHT_START);
         /* The status bar stays at the frame edges whatever the margins do
