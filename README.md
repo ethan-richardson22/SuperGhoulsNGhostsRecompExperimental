@@ -10,17 +10,14 @@ framework's built-in interpreter.
 > this project, in the repository or in any release. The recompiled C is
 > generated locally from your own copy and is never committed.
 
+## Enhancements
+- **Widescreen** - option to play in 16:9, although sprites mainly look 
+- **Lag Removal** - removes the lag that plagued the game running on original hardware.
+- **Graphical improvements from original** - this primarily means the background being drawn behind the hud in levels it was disabled from in the original.
+
 ## Status
 
-**Early, but playable through Level 1.** Verified against the snes9x emulator
-by comparing the game's work RAM ($0000-$1FFF) frame by frame:
-
-| Section | Result |
-|---|---|
-| Boot, intro, title screen | Identical game state |
-| Level 1 (1012 gameplay frames) | Identical game state |
-| Death and game over | Identical game state |
-| Later levels, bosses, upgrades | Not tested yet |
+**Playable through Level 3.** Not entirely accurate to original hardware, at least in level 1. It's very close, and I want to get it completely accurate without any enhancements enabled. 
 
 Known issues:
 
